@@ -17,3 +17,5 @@ redis==6.1.0
 Unidecode==1.4.0
 
 django-ratelimit==4.1.0
+
+drf-spectacular==0.28.0

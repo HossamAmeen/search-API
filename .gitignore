@@ -49,3 +49,6 @@ venv.bak/
 
 # PyCharm
 .idea/
+
+
+static/
