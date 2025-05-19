@@ -39,8 +39,14 @@ pip install -r requirements.txt
 cp .env_example .env
 # Edit .env with your credentials
 
-# Database setup
+# PostgreSQL extensions
+psql -U youruser -d yourdb -c "CREATE EXTENSION pg_trgm; CREATE EXTENSION fuzzystrmatch;"
+
+# Run migrations
 python manage.py migrate
+
+# Start Redis (requires Redis server installed)
+redis-server &
 
 # Generate fake products
 python manage.py generate_fake_products --count 10000 --batch 1000

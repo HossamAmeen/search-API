@@ -6,8 +6,11 @@ from rest_framework.response import Response
 from .filters import ProductSearchFilter
 from .models import Product
 from .serializers import ProductSerializer
+from django.utils.decorators import method_decorator
+from django_ratelimit.decorators import ratelimit
 
 
+@method_decorator(ratelimit(key='ip', rate='100/hour', block=True), name='dispatch')
 class ProductAPIView(ListAPIView):
     queryset = Product.objects.select_related("brand", "category").all()
     serializer_class = ProductSerializer
