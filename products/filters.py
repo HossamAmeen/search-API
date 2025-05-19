@@ -1,57 +1,55 @@
-# products/filters.py
-from django.db.models import Q, Func
-from django.contrib.postgres.search import SearchQuery, SearchRank
-from django.contrib.postgres.lookups import Unaccent
-import django_filters
+from django.contrib.postgres.search import (
+    SearchQuery,
+    SearchRank,
+    SearchVector,
+    TrigramSimilarity,
+)
+from django.db.models import F, Q
+from django_filters import rest_framework as filters
+
 from .models import Product
 
-from django.db.models import Func, F
-from django.db.models.functions import Lower
 
-class Unaccent(Func):
-    function = 'unaccent'
-    template = "%(function)s(%(expressions)s)"
-
-
-class ProductFilter(django_filters.FilterSet):
-    query = django_filters.CharFilter(method='custom_search')
-    category = django_filters.CharFilter(field_name='category__slug')
-    brand = django_filters.CharFilter(field_name='brand__slug')
-    min_calories = django_filters.NumberFilter(field_name='calories', lookup_expr='gte')
-    max_calories = django_filters.NumberFilter(field_name='calories', lookup_expr='lte')
+class ProductSearchFilter(filters.FilterSet):
+    search = filters.CharFilter(method="universal_search", label="Search")
 
     class Meta:
         model = Product
-        fields = ['query', 'category', 'brand', 'min_calories', 'max_calories']
+        fields = ["search"]
 
-    def custom_search(self, queryset, name, value):
-        if not value:
-            return queryset
+    def universal_search(self, queryset, name, value):
+        if not value or len(value) < 2:
+            return queryset.none()
 
-        normalized_query = value.lower()
-        terms = normalized_query.split()
-
-        search_query_en = SearchQuery(normalized_query, config='english')
-        search_query_ar = SearchQuery(normalized_query, config='arabic')
-
-        # Annotate unaccented and lowercased fields
-        queryset = queryset.annotate(
-            name_en_unaccented=Lower(Unaccent(F('name_en'))),
-            name_ar_unaccented=Lower(Unaccent(F('name_ar'))),
-            rank_en=SearchRank(F('search_vector_en'), search_query_en),
-            rank_ar=SearchRank(F('search_vector_ar'), search_query_ar),
+        # Create search vectors using only existing fields
+        vector_en = SearchVector("name_en", weight="A") + SearchVector(
+            "description_en", weight="B"
+        )
+        vector_ar = SearchVector("name_ar", weight="A") + SearchVector(
+            "description_ar", weight="B"
         )
 
-        conditions = Q()
-        for term in terms:
-            term = term.lower()
-            conditions |= Q(name_en__icontains=term)
-            conditions |= Q(name_ar__icontains=term)
-            conditions |= Q(name_en_unaccented__icontains=term)
-            conditions |= Q(name_ar_unaccented__icontains=term)
+        search_query = SearchQuery(value, config="simple")
+
+        queryset = queryset.annotate(
+            ft_rank_en=SearchRank(vector_en, search_query),
+            ft_rank_ar=SearchRank(vector_ar, search_query),
+            fuzzy_name_en=TrigramSimilarity("name_en", value),
+            fuzzy_name_ar=TrigramSimilarity("name_ar", value),
+            fuzzy_desc_en=TrigramSimilarity("description_en", value),
+            fuzzy_desc_ar=TrigramSimilarity("description_ar", value),
+            relevance=(
+                (F("ft_rank_en") + F("ft_rank_ar")) * 0.7
+                + (F("fuzzy_name_en") + F("fuzzy_name_ar")) * 0.3
+                + (F("fuzzy_desc_en") + F("fuzzy_desc_ar")) * 0.2
+            ),
+        )
 
         return queryset.filter(
-            Q(search_vector_en=search_query_en) |
-            Q(search_vector_ar=search_query_ar) |
-            conditions
-        ).order_by('-rank_en', '-rank_ar').distinct()
+            Q(ft_rank_en__gt=0.1)
+            | Q(ft_rank_ar__gt=0.1)
+            | Q(fuzzy_name_en__gt=0.2)
+            | Q(fuzzy_name_ar__gt=0.2)
+            | Q(name_en__icontains=value)  # Fallback partial match
+            | Q(name_ar__icontains=value)  # Fallback partial match
+        ).order_by("-relevance")
